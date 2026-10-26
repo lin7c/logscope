@@ -1,17 +1,56 @@
 # logscope
 
-`logscope.py` 是一个只使用 Python 标准库的服务器日志摘要工具。它仅统计完整匹配 `时间戳 级别 [模块] 消息` 格式的行（时间戳为有效的 `YYYY-MM-DD HH:MM:SS` 日期时间，级别为大写字母组成的名称，模块不能为空且不能含空格或方括号，消息不能为空），其他行会跳过。对 `ERROR` 行，消息的第一个词作为错误码。
+`logscope.py` answers three questions about structured server logs:
 
-## 用法
+1. **Where are errors concentrated?** `top` reports counts by log level and error code, plus the first line where each error code appears.
+2. **Which hours have the most errors?** `trend` aggregates `ERROR` entries by hour.
+3. **What happened during a specified time period?** `window` summarizes entries in a time range whose start is inclusive and end is exclusive.
+
+## `top`: error counts and first occurrences
 
 ```sh
 python3 logscope.py top sample.log
+```
+
+Output highlights:
+
+- Counts for each log level.
+- `ERROR` counts by error code, ordered from most frequent to least frequent (ties are alphabetical).
+- The first file line number for each error code.
+
+## `trend`: hourly error counts
+
+```sh
 python3 logscope.py trend sample.log
+```
+
+Output highlights:
+
+- One `HH: count` line for each hour from `00` through `23`.
+- Each count is the number of `ERROR` entries with a timestamp in that hour.
+
+## `window`: summarize a time range
+
+```sh
 python3 logscope.py window sample.log "2026-10-21 20:00:00" "2026-10-21 21:00:00"
 ```
 
-- `top` 输出各级别的行数、按数量从多到少排列的 `ERROR` 消息首词（错误码）计数，以及每个错误码首次出现的文件行号。计数相同时按错误码字母顺序排列。
-- `trend` 按小时汇总 `ERROR` 数量，并始终输出 `00` 到 `23` 共 24 行，格式为 `HH: 数量`。
-- `window` 统计指定时间窗口内的日志，输出级别统计和 `ERROR` 错误码计数。起始时间包含在窗口内，结束时间不包含在窗口内；时间格式为 `YYYY-MM-DD HH:MM:SS`。
+Provide start and end timestamps in `YYYY-MM-DD HH:MM:SS` format. The start is inclusive and the end is exclusive. The output reports log-level counts and `ERROR` counts by error code for entries in that interval.
 
-三个子命令均逐行流式读取日志；不符合日志格式或时间戳无效的行会跳过。也可以将 `sample.log` 换成其他日志文件路径。
+## Malformed lines and memory use
+
+Entries that do not match the expected log format, or contain an invalid timestamp, are skipped and counted. Every command ends its output with `Skipped malformed lines: N`, where `N` is the number of skipped entries.
+
+Log entries are parsed one at a time as the file is streamed; the entire log file is not read into memory.
+
+## Requirements
+
+Only Python 3 is required; the tool uses only the Python standard library.
+
+## Tests
+
+Run the test suite with:
+
+```sh
+python3 -m unittest
+```

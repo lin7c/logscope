@@ -20,15 +20,18 @@ def analyze(path):
     levels = Counter()
     errors = Counter()
     first_seen = {}
+    skipped = 0
     with open(path, encoding="utf-8") as log_file:
         for line_number, raw_line in enumerate(log_file, 1):
             line = raw_line.rstrip("\r\n")
             match = LOG_LINE.fullmatch(line)
             if match is None:
+                skipped += 1
                 continue
             try:
                 datetime.strptime(match.group(1), TIMESTAMP_FORMAT)
             except ValueError:
+                skipped += 1
                 continue
             level = match.group(2)
             levels[level] += 1
@@ -39,7 +42,7 @@ def analyze(path):
                 code = message.split(None, 1)[0]
                 errors[code] += 1
                 first_seen.setdefault(code, line_number)
-    return levels, errors, first_seen
+    return levels, errors, first_seen, skipped
 
 
 def iter_records(path):
@@ -64,31 +67,90 @@ def iter_records(path):
 
 def trend(path):
     error_counts = [0] * 24
-    for timestamp, level, _ in iter_records(path):
-        if level == "ERROR":
-            error_counts[timestamp.hour] += 1
-    return error_counts
+    skipped = 0
+    with open(path, encoding="utf-8") as log_file:
+        for raw_line in log_file:
+            line = raw_line.rstrip("\r\n")
+            match = LOG_LINE.fullmatch(line)
+            if match is None:
+                skipped += 1
+                continue
+            try:
+                timestamp = datetime.strptime(match.group(1), TIMESTAMP_FORMAT)
+            except ValueError:
+                skipped += 1
+                continue
+            if match.group(2) == "ERROR":
+                error_counts[timestamp.hour] += 1
+    return error_counts, skipped
 
 
 def window(path, start, end):
     levels = Counter()
     errors = Counter()
-    for timestamp, level, error_code in iter_records(path):
-        if start <= timestamp < end:
-            levels[level] += 1
-            if level == "ERROR":
-                errors[error_code] += 1
-    return levels, errors
+    skipped = 0
+    with open(path, encoding="utf-8") as log_file:
+        for raw_line in log_file:
+            line = raw_line.rstrip("\r\n")
+            match = LOG_LINE.fullmatch(line)
+            if match is None:
+                skipped += 1
+                continue
+            try:
+                timestamp = datetime.strptime(match.group(1), TIMESTAMP_FORMAT)
+            except ValueError:
+                skipped += 1
+                continue
+            level = match.group(2)
+            if start <= timestamp < end:
+                levels[level] += 1
+                if level == "ERROR":
+                    message = line.split("]", 1)[1].strip()
+                    errors[message.split(None, 1)[0]] += 1
+    return levels, errors, skipped
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Summarize structured server logs.")
+    parser = argparse.ArgumentParser(
+        description="Summarize structured server logs.",
+        epilog=(
+            "Three questions this tool answers:\n"
+            "  top: Where are errors concentrated? Counts by level and error code, "
+            "and the first line where each error code appears.\n"
+            "  trend: During which time period are errors most severe? Aggregated by hour.\n"
+            "  window: What happened during a specified time period? Start is inclusive; end is exclusive.\n"
+            "\n"
+            "Examples:\n"
+            "  python3 logscope.py top sample.log\n"
+            "  python3 logscope.py trend sample.log\n"
+            "  python3 logscope.py window sample.log \"2026-10-21 20:00:00\" \"2026-10-21 21:00:00\""
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
-    top_parser = subparsers.add_parser("top", help="show level and ERROR summaries")
+    top_parser = subparsers.add_parser(
+        "top",
+        help="show level and ERROR summaries",
+        description=(
+            "Show counts by log level and ERROR code, including the first occurrence "
+            "(line number) of each ERROR code."
+        ),
+    )
     top_parser.add_argument("logfile", help="path to the log file")
-    trend_parser = subparsers.add_parser("trend", help="show hourly ERROR counts")
+    trend_parser = subparsers.add_parser(
+        "trend",
+        help="show hourly ERROR counts",
+        description="Show ERROR counts aggregated hourly across the log.",
+    )
     trend_parser.add_argument("logfile", help="path to the log file")
-    window_parser = subparsers.add_parser("window", help="summarize a time window")
+    window_parser = subparsers.add_parser(
+        "window",
+        help="summarize a time window",
+        description=(
+            "Summarize log records in the specified time window. The start is "
+            "inclusive and the end is exclusive."
+        ),
+    )
     window_parser.add_argument("logfile", help="path to the log file")
     window_parser.add_argument("start", help="window start (YYYY-MM-DD HH:MM:SS)")
     window_parser.add_argument("end", help="window end, exclusive (YYYY-MM-DD HH:MM:SS)")
@@ -105,11 +167,11 @@ def main(argv=None):
 
     try:
         if args.command == "top":
-            levels, errors, first_seen = analyze(args.logfile)
+            levels, errors, first_seen, skipped = analyze(args.logfile)
         elif args.command == "trend":
-            error_counts = trend(args.logfile)
+            error_counts, skipped = trend(args.logfile)
         else:
-            levels, errors = window(args.logfile, start, end)
+            levels, errors, skipped = window(args.logfile, start, end)
     except (OSError, UnicodeError) as exc:
         print(f"logscope: {exc}", file=sys.stderr)
         return 2
@@ -124,9 +186,11 @@ def main(argv=None):
         print("\nFirst occurrence (line number) by ERROR code:")
         for code in sorted(first_seen):
             print(f"  {code}: {first_seen[code]}")
+        print(f"Skipped malformed lines: {skipped}")
     elif args.command == "trend":
         for hour, count in enumerate(error_counts):
             print(f"{hour:02d}: {count}")
+        print(f"Skipped malformed lines: {skipped}")
     else:
         print("Level counts:")
         for level in sorted(levels):
@@ -134,6 +198,7 @@ def main(argv=None):
         print("\nERROR counts by code:")
         for code, count in sorted(errors.items(), key=lambda item: (-item[1], item[0])):
             print(f"  {code}: {count}")
+        print(f"Skipped malformed lines: {skipped}")
     return 0
 
 
