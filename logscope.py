@@ -92,13 +92,39 @@ def analyze_window(path, start, end):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Analyze structured server logs.")
+    parser = argparse.ArgumentParser(
+        description="Analyze structured server logs.",
+        epilog=(
+            "Three questions this tool answers:\n"
+            "  top shows where errors concentrate (level counts, error-code counts, and the first occurrence of each error code)\n"
+            "  trend shows which hour hits hardest (hourly aggregation)\n"
+            "  window shows what happened inside a time range (start inclusive, end exclusive)\n"
+            "\n"
+            "Examples:\n"
+            "  python3 logscope.py top sample.log\n"
+            "  python3 logscope.py trend sample.log\n"
+            "  python3 logscope.py window sample.log \"2026-10-21 20:00:00\" \"2026-10-21 21:00:00\""
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
-    top_parser = subparsers.add_parser("top", help="show level and ERROR code summaries")
+    top_parser = subparsers.add_parser(
+        "top",
+        help="show level and ERROR code summaries",
+        description="Show level counts, ERROR code counts, and the first occurrence of each ERROR code.",
+    )
     top_parser.add_argument("logfile", type=Path)
-    trend_parser = subparsers.add_parser("trend", help="show ERROR counts by hour")
+    trend_parser = subparsers.add_parser(
+        "trend",
+        help="show ERROR counts by hour",
+        description="Show hourly aggregation of ERROR counts.",
+    )
     trend_parser.add_argument("logfile", type=Path)
-    window_parser = subparsers.add_parser("window", help="summarize entries in a time range")
+    window_parser = subparsers.add_parser(
+        "window",
+        help="summarize entries in a time range",
+        description="Summarize entries in a time range with an inclusive start and exclusive end.",
+    )
     window_parser.add_argument("logfile", type=Path)
     window_parser.add_argument("start", type=parse_timestamp)
     window_parser.add_argument("end", type=parse_timestamp)
@@ -112,6 +138,8 @@ def main(argv=None):
             print(f"Skipped malformed lines: {skipped}")
             return 0
         if args.command == "window":
+            if args.end < args.start:
+                parser.error("window end must be greater than or equal to start")
             levels, errors, skipped = analyze_window(args.logfile, args.start, args.end)
             print("Line counts by level:")
             for level in ("DEBUG", "INFO", "WARN", "WARNING", "ERROR", "CRITICAL"):
